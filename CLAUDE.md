@@ -3,10 +3,12 @@
 A personal Telegram bot that logs misc. spending - amount, item, and a
 user-defined category, e.g. "$12, lunch, food" - plus a static GitHub Pages
 dashboard showing total/average/largest spend and a by-category breakdown
-over week/month/quarter/year. Single user, SQLite-backed, runs as a
-long-lived polling process (`python main.py`). Same overall shape as the
-sibling [[chores-assistant]] and [[wake-work-sleep-logger]] projects,
-adapted for money instead of chores/timestamps.
+over week/month/quarter/year. Also supports per-category monthly budgets
+with warnings at log time (`/budget`, `/budgets`) - see "Budgets" below.
+Single user, SQLite-backed, runs as a long-lived polling process (`python
+main.py`). Same overall shape as the sibling [[chores-assistant]] and
+[[wake-work-sleep-logger]] projects, adapted for money instead of
+chores/timestamps.
 
 ## Architecture
 
@@ -17,13 +19,16 @@ config.py                Env var loading (.env via python-dotenv) + Config.now()
 database.py              SQLAlchemy Expense model + backup_database()
 message_parser.py        Parses "$<amount>, <item>[, <category>]" into (cents, item, category)
 entries.py               Lookup/delete/edit the most recent N expenses, by 1-based index
-telegram_handler.py      /start, /help, /stats, /recent, /delete, /edit, message handling
+budgets.py               Set/list/clear per-category budgets + month-to-date status against them
+telegram_handler.py      /start, /help, /stats, /recent, /delete, /edit, /budget, /budgets, message handling
 stats.py                 Per-day aggregation + totals/averages/category breakdown over a range
 export_stats.py          Dumps docs/data.json for the GitHub Pages dashboard
 docs/index.html           Static dashboard (fetches data.json client-side, no build step)
 scripts/export_and_push.sh    Runs export_stats.py, commits+pushes docs/data.json if changed
 scripts/manual_smoke_test.py  Sends a real Telegram message via the live bot for manual checks
 tests/                   pytest suite, isolated in-memory DB (conftest.py fixture)
+RESEARCH.md              Competitive research on other manual/no-bank-link expense trackers -
+                         the basis for choosing budgets as the highest-impact feature to add
 ```
 
 Message flow: an incoming Telegram text message -> `message_parser.
@@ -134,6 +139,65 @@ objects, so they're directly unit-testable) and share one convention:
   which is the opposite case - a new event at a specified past time, not a
   correction to an existing one.)
 
+## Budgets - /budget, /budgets, and log-time warnings
+
+Added after researching three well-known manual/no-bank-link expense apps
+(Monefy, Goodbudget, Fudget - see `RESEARCH.md`). The two more full-featured
+of the three (Monefy, Goodbudget) converge on the same thing beyond basic
+logging: a spending limit per category with a warning as you approach or
+cross it. That was the identified gap - this project could review spending
+after the fact but had no way to say "you're overspending" *in the
+moment* - so it became the #1 feature to add.
+
+- **A budget is a trailing-30-day cap per category** (`database.Budget`,
+  one row per category, `category` is `unique`). "Monthly" here means the
+  exact same window `stats.RANGE_MONTH` already uses everywhere else as
+  "month" - not a calendar month - specifically so budget percentages stay
+  consistent with what `/stats`' "Last 30 days" section already shows.
+  Don't redefine "month" differently for budgets alone.
+- **`/budget <category> $<amount>` both sets and clears** - a `$0` amount
+  deletes the budget (`budgets.set_budget` returns `None` in that case).
+  There's deliberately no separate `/unbudget` or `/deletebudget` command;
+  `parse_budget_command` in `message_parser.py` accepts `$0` explicitly
+  (unlike `parse_expense`, which rejects zero/negative amounts as not a
+  real purchase).
+- **Warning thresholds live in `budgets.WARNING_THRESHOLD` (0.8) and
+  `BudgetStatus.is_near`/`is_over`** - "near" is 80-100% and *exclusive* of
+  "over" (a category that's over budget is `is_over=True, is_near=False`),
+  so a caller only ever needs to check one or the other, not both. Every
+  place that displays budget status (`/budgets`, the post-log warning in
+  `handle_message`, the dashboard's `renderBudgets`) reimplements the same
+  two-state logic independently - if the threshold or semantics change,
+  all three need updating together, there's no single shared formatter.
+- **The post-log warning only fires at 80%+** - under that, `handle_message`
+  adds nothing to the "Logged: ..." reply. This was a deliberate choice to
+  avoid alert fatigue; don't make it chattier (e.g. showing budget status
+  on every single logged expense) without the user asking for that.
+- **`/budgets` and the dashboard's budget list both sort by `pct_used`
+  descending** - the most over/closest-to-over category shows first, on
+  the theory that's the one you'd actually act on. Keep this sort order in
+  sync between the two surfaces if either changes.
+- **Budget targets (not just category subtotals) are now part of the
+  public `docs/data.json` export** (`export_stats.py`'s `budgets` key).
+  This extends the pre-existing "aggregates are public, individual
+  transactions are private" line from the data-pipeline section below - a
+  target number like "food budget: $300/month" is the same kind of
+  aggregate the category subtotals already are, not a new category of
+  exposure. If a future feature wanted to publish something more granular
+  than a target or a subtotal, that's a fresh privacy call to flag to the
+  user, not an extension of this one.
+- **Verifying the dashboard's budget math**: rather than trust the
+  JS-in-a-browser by eye, the functions that compute budget rows
+  (`computeCategoryTotals`, `monthToDateCategoryTotals`, the row-building
+  logic in `renderBudgets`) were copied verbatim into a standalone Node
+  script and run directly against the real exported `docs/data.json`,
+  cross-checked against the same scenario computed independently in Python
+  via `budgets.status_for_category`. Both surfaces agreed exactly (spent/
+  budget/pct/state). This is a reusable technique for this project - Claude
+  can't screenshot/click the live dashboard, but Node is available on the
+  Linux box and locally, so pure-data (non-DOM) JS functions in
+  `docs/index.html` can be verified this way instead of only by inspection.
+
 ## How the schema evolved (read this before assuming the current shape is final)
 
 This project's schema and message format changed twice in its first day,
@@ -195,15 +259,16 @@ Linux box (systemd timer, every 15 min)
 - `export_stats.py` only writes JSON - it never touches git, same
   separation of concerns as the sibling project.
 - `docs/data.json`'s per-day rows are `{date, total_cents, count,
-  max_cents, min_cents, categories: {category: total_cents}}` - enough
-  for the dashboard to compute total/avg/largest/smallest/by-category for
-  any selected range client-side. **Per-transaction `item` text is
-  deliberately never exported** - only category *subtotals* are public,
-  so the dashboard can show "you spent $340 on food this month" without
-  also publishing "you bought Yummy Pho for $50 on Aug 24". If a future
-  feature wants per-transaction detail on the dashboard, that's a
-  privacy-relevant decision to flag to the user, not just a data-shape
-  change.
+  max_cents, min_cents, categories: {category: total_cents}}`, plus a
+  top-level `budgets: [{category, amount_cents}]` (current budget targets,
+  not day-scoped) - enough for the dashboard to compute total/avg/largest/
+  smallest/by-category/budget-status for any selected range client-side.
+  **Per-transaction `item` text is deliberately never exported** - only
+  category *subtotals* and budget *targets* are public, so the dashboard
+  can show "you spent $340 on food this month, budget $300" without also
+  publishing "you bought Yummy Pho for $50 on Aug 24". If a future feature
+  wants per-transaction detail on the dashboard, that's a privacy-relevant
+  decision to flag to the user, not just a data-shape change.
 
 ## Running the bot / working preferences
 
