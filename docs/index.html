@@ -117,6 +117,12 @@
   .category-row .bar-fill { background: var(--bar); height: 100%; border-radius: 4px; }
   .category-row .amount { text-align: right; color: var(--muted); }
 
+  .budget-row { grid-template-columns: 120px 1fr 120px; }
+  .budget-row .bar-fill.near { background: #f59e0b; }
+  .budget-row .bar-fill.over { background: #ef4444; }
+  .budget-row .amount.near { color: #f59e0b; }
+  .budget-row .amount.over { color: #ef4444; }
+
   .empty { color: var(--muted); text-align: center; padding: 60px 0; }
 </style>
 </head>
@@ -136,6 +142,10 @@
     </div>
 
     <div class="cards" id="cards"></div>
+    <div class="chart-card category-card" id="budgets-card" hidden>
+      <div class="chart-title">Budgets (this month)</div>
+      <div id="budgets"></div>
+    </div>
     <div class="chart-card">
       <div class="chart-title">Daily spending</div>
       <div id="chart"></div>
@@ -277,6 +287,44 @@ function renderCategories(days) {
   `).join("");
 }
 
+function monthToDateCategoryTotals() {
+  // Independent of the selected tab - budgets are always monthly, so this
+  // always reflects the trailing 30 days, same as the bot's /budgets.
+  return computeCategoryTotals(filteredDays("month"));
+}
+
+function renderBudgets() {
+  const cardEl = document.getElementById("budgets-card");
+  const budgets = DATA.budgets || [];
+  if (!budgets.length) {
+    cardEl.hidden = true;
+    return;
+  }
+  cardEl.hidden = false;
+
+  const spentByCategory = Object.fromEntries(monthToDateCategoryTotals());
+  const rows = budgets
+    .map(b => ({
+      category: b.category,
+      budgetCents: b.amount_cents,
+      spentCents: spentByCategory[b.category] || 0,
+    }))
+    .sort((a, b) => (b.spentCents / b.budgetCents) - (a.spentCents / a.budgetCents));
+
+  document.getElementById("budgets").innerHTML = rows.map(r => {
+    const pct = r.budgetCents ? r.spentCents / r.budgetCents : 0;
+    const state = pct > 1 ? "over" : (pct >= 0.8 ? "near" : "");
+    const barWidth = Math.min(pct, 1) * 100;
+    return `
+      <div class="category-row budget-row">
+        <span class="name">${r.category}</span>
+        <span class="bar-track"><span class="bar-fill ${state}" style="width:${barWidth.toFixed(1)}%"></span></span>
+        <span class="amount ${state}">${formatCents(r.spentCents)} / ${formatCents(r.budgetCents)}</span>
+      </div>
+    `;
+  }).join("");
+}
+
 function render() {
   const metaEl = document.getElementById("meta");
   metaEl.textContent = DATA.generated_at
@@ -289,6 +337,7 @@ function render() {
     document.getElementById("cards").innerHTML = "";
     document.getElementById("chart").innerHTML = "";
     document.getElementById("categories").innerHTML = "";
+    document.getElementById("budgets-card").hidden = true;
     return;
   }
   emptyEl.hidden = true;
@@ -297,6 +346,7 @@ function render() {
   renderCards(days, currentRange);
   renderChart(days);
   renderCategories(days);
+  renderBudgets();
 }
 
 document.getElementById("tabs").addEventListener("click", (e) => {

@@ -8,8 +8,11 @@ purchase that day, and a per-category subtotal (all in integer cents) -
 enough for the dashboard to compute total/avg/largest/smallest/by-category
 over any selected range without re-deriving them from individual
 transactions client-side. Per-transaction `item` text is deliberately left
-out of the export - only category subtotals are public, not what you
-actually bought.
+out of the export - only category subtotals (and, as of the budgets
+feature, category budget *targets*) are public, not what you actually
+bought. A target number ("food budget: $300/month") is the same kind of
+aggregate the category subtotals already are - it doesn't cross into the
+per-transaction detail the export was designed to keep private.
 """
 
 import json
@@ -19,6 +22,7 @@ os.environ.setdefault("SPENDING_BOT_ALLOW_LIVE_DB", "1")
 
 from config import Config
 from database import SessionLocal
+from budgets import list_budgets
 from stats import build_daily_totals
 
 DATA_JSON_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "docs", "data.json")
@@ -28,6 +32,8 @@ def build_export() -> dict:
     db = SessionLocal()
     try:
         by_date = build_daily_totals(db)
+        budgets = list_budgets(db)
+        budgets_export = [{"category": b.category, "amount_cents": b.amount_cents} for b in budgets]
     finally:
         db.close()
 
@@ -47,6 +53,7 @@ def build_export() -> dict:
         "generated_at": Config.now().isoformat(),
         "timezone": str(Config.TIMEZONE),
         "days": days,
+        "budgets": budgets_export,
     }
 
 

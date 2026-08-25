@@ -6,7 +6,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pytest
 
 from database import UNCATEGORIZED
-from message_parser import parse_expense
+from message_parser import parse_budget_command, parse_expense
 
 
 @pytest.mark.parametrize("text,expected_cents,expected_item,expected_category", [
@@ -45,3 +45,26 @@ def test_comma_thousands_separator_collides_with_delimiter():
     # Large amounts must be written without a thousands separator.
     assert parse_expense("$1,200, rent, bills") == (100, "200", "rent,bills")
     assert parse_expense("$1200, rent, bills") == (120000, "rent", "bills")
+
+
+@pytest.mark.parametrize("text,expected_category,expected_cents", [
+    ("food $300", "food", 30000),
+    ("$300 food", "food", 30000),
+    ("fast food $45.50", "fast food", 4550),
+    ("food, $300", "food", 30000),
+    ("food $0", "food", 0),  # $0 is valid here - it's how /budget clears one
+    ("Food $300", "food", 30000),  # category lowercased
+    ("  gas   $50  ", "gas", 5000),
+])
+def test_parse_budget_command_recognized(text, expected_category, expected_cents):
+    assert parse_budget_command(text) == (expected_category, expected_cents)
+
+
+@pytest.mark.parametrize("text", [
+    "food",       # no amount at all
+    "$300",       # amount only, no category
+    "$-5 food",   # negative amount
+    "",
+])
+def test_parse_budget_command_unrecognized_returns_none(text):
+    assert parse_budget_command(text) is None

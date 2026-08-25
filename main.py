@@ -28,6 +28,8 @@ def setup_handlers(app: Application):
     app.add_handler(CommandHandler("recent", TelegramHandler.show_recent))
     app.add_handler(CommandHandler("delete", TelegramHandler.delete_entry))
     app.add_handler(CommandHandler("edit", TelegramHandler.edit_entry))
+    app.add_handler(CommandHandler("budget", TelegramHandler.set_budget_command))
+    app.add_handler(CommandHandler("budgets", TelegramHandler.show_budgets))
     app.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, TelegramHandler.handle_message)
     )

@@ -79,6 +79,23 @@ class Expense(Base):
         return f"<Expense id={self.id} amount_cents={self.amount_cents} category={self.category} timestamp={self.timestamp}>"
 
 
+class Budget(Base):
+    """A monthly spending limit for one category. "Monthly" here means the
+    same trailing-30-day window stats.py uses everywhere else as "month" -
+    not a calendar month - so budget status stays consistent with the rest
+    of the app's numbers instead of introducing a second definition."""
+    __tablename__ = "budgets"
+
+    id = Column(Integer, primary_key=True, index=True)
+    category = Column(String, nullable=False, unique=True, index=True)
+    amount_cents = Column(Integer, nullable=False)
+    created_at = Column(DateTime, default=Config.now)
+    updated_at = Column(DateTime, default=Config.now, onupdate=Config.now)
+
+    def __repr__(self):
+        return f"<Budget category={self.category} amount_cents={self.amount_cents}>"
+
+
 def backup_database():
     """
     Copy the SQLite database file into backups/ before touching it further.

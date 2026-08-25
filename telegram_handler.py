@@ -7,8 +7,9 @@ from telegram.ext import ContextTypes
 
 from config import Config
 from database import Expense, SessionLocal
+from budgets import budget_status, set_budget, status_for_category
 from entries import RECENT_LIMIT, delete_recent, edit_recent, get_recent
-from message_parser import parse_expense
+from message_parser import parse_budget_command, parse_expense
 from stats import category_breakdown, format_cents, range_stats, spend_rate_stats, build_daily_totals
 
 RANGE_ORDER = ["week", "month", "quarter", "year"]
@@ -50,7 +51,12 @@ class TelegramHandler:
             f"  /recent - Show the last {RECENT_LIMIT} entries, numbered\n"
             f"  /delete <n> - Delete entry n from /recent\n"
             f"  /edit <n> $amount, item, category - Overwrite entry n\n"
-            f"  /help - Show this message"
+            f"  /budget <category> $<amount> - Set a monthly limit for a category "
+            f"(e.g. /budget food $300). $0 clears it\n"
+            f"  /budgets - Check status against all your budgets\n"
+            f"  /help - Show this message\n\n"
+            f"Once a category has a budget, logging into it warns you at 80% "
+            f"and again if you go over."
         )
 
     @staticmethod
@@ -210,6 +216,63 @@ class TelegramHandler:
         )
 
     @staticmethod
+    async def set_budget_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not TelegramHandler._is_authorized(update):
+            return
+
+        parts = (update.message.text or "").split(None, 1)
+        parsed = parse_budget_command(parts[1]) if len(parts) >= 2 else None
+        if parsed is None:
+            await update.message.reply_text(
+                "Usage: /budget <category> $<amount> - e.g. \"/budget food $300\". "
+                "$0 clears an existing budget."
+            )
+            return
+        category, amount_cents = parsed
+
+        db = SessionLocal()
+        try:
+            budget = set_budget(db, category, amount_cents)
+        finally:
+            db.close()
+
+        if budget is None:
+            await update.message.reply_text(f"Cleared the budget for \"{category}\".")
+            return
+
+        await update.message.reply_text(
+            f"Budget set: {category} — {format_cents(budget.amount_cents)}/month"
+        )
+
+    @staticmethod
+    async def show_budgets(update: Update, context: ContextTypes.DEFAULT_TYPE):
+        if not TelegramHandler._is_authorized(update):
+            return
+
+        db = SessionLocal()
+        try:
+            by_date = build_daily_totals(db)
+            statuses = budget_status(db, by_date)
+        finally:
+            db.close()
+
+        if not statuses:
+            await update.message.reply_text(
+                "No budgets set yet. Try \"/budget food $300\"."
+            )
+            return
+
+        lines = ["\U0001F4CB Budgets (this month so far)"]
+        for s in statuses:
+            marker = "⚠️" if s.is_over else ("\U0001F53C" if s.is_near else "")
+            lines.append(
+                f"  {s.category}: {format_cents(s.spent_cents)} / "
+                f"{format_cents(s.budget_cents)}  ({s.pct_used * 100:.0f}%) {marker}"
+            )
+
+        await update.message.reply_text("\n".join(lines))
+
+    @staticmethod
     def _log_expense(amount_cents: int, item: str, category: str, raw_message: str) -> None:
         db = SessionLocal()
         try:
@@ -246,6 +309,27 @@ class TelegramHandler:
         amount_cents, item, category = parsed
         TelegramHandler._log_expense(amount_cents, item, category, text)
 
-        await update.message.reply_text(
-            f"Logged: {format_cents(amount_cents)} — {item} [{category}]"
-        )
+        reply = f"Logged: {format_cents(amount_cents)} — {item} [{category}]"
+
+        db = SessionLocal()
+        try:
+            by_date = build_daily_totals(db)
+            status = status_for_category(db, by_date, category)
+        finally:
+            db.close()
+
+        if status is not None:
+            if status.is_over:
+                reply += (
+                    f"\n⚠️ Over budget: {format_cents(status.spent_cents)} / "
+                    f"{format_cents(status.budget_cents)} for {category} this month "
+                    f"({status.pct_used * 100:.0f}%)"
+                )
+            elif status.is_near:
+                reply += (
+                    f"\n\U0001F53C {format_cents(status.spent_cents)} / "
+                    f"{format_cents(status.budget_cents)} for {category} this month "
+                    f"({status.pct_used * 100:.0f}%)"
+                )
+
+        await update.message.reply_text(reply)
