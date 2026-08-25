@@ -1,12 +1,12 @@
 # Spending Tracker — Project Steering File
 
-A personal Telegram bot that logs misc. spending - amount + an optional
-free-text note, e.g. "$12 lunch" - plus a static GitHub Pages dashboard
-showing total/average/largest spend over week/month/quarter/year. Single
-user, SQLite-backed, runs as a long-lived polling process (`python
-main.py`). Same overall shape as the sibling [[chores-assistant]] and
-[[wake-work-sleep-logger]] projects, adapted for money instead of
-categories/timestamps.
+A personal Telegram bot that logs misc. spending - amount, item, and a
+user-defined category, e.g. "$12, lunch, food" - plus a static GitHub Pages
+dashboard showing total/average/largest spend and a by-category breakdown
+over week/month/quarter/year. Single user, SQLite-backed, runs as a
+long-lived polling process (`python main.py`). Same overall shape as the
+sibling [[chores-assistant]] and [[wake-work-sleep-logger]] projects,
+adapted for money instead of chores/timestamps.
 
 ## Architecture
 
@@ -15,9 +15,10 @@ main.py                 Entry point. Builds the python-telegram-bot Application,
                          registers handlers, runs polling.
 config.py                Env var loading (.env via python-dotenv) + Config.now()
 database.py              SQLAlchemy Expense model + backup_database()
-message_parser.py        Parses "$<amount> <note>" into (amount_cents, note)
-telegram_handler.py      /start, /help, /stats, and free-text message handling
-stats.py                 Per-day aggregation + total/avg/largest/smallest over a range
+message_parser.py        Parses "$<amount>, <item>[, <category>]" into (cents, item, category)
+entries.py               Lookup/delete/edit the most recent N expenses, by 1-based index
+telegram_handler.py      /start, /help, /stats, /recent, /delete, /edit, message handling
+stats.py                 Per-day aggregation + totals/averages/category breakdown over a range
 export_stats.py          Dumps docs/data.json for the GitHub Pages dashboard
 docs/index.html           Static dashboard (fetches data.json client-side, no build step)
 scripts/export_and_push.sh    Runs export_stats.py, commits+pushes docs/data.json if changed
@@ -26,12 +27,18 @@ tests/                   pytest suite, isolated in-memory DB (conftest.py fixtur
 ```
 
 Message flow: an incoming Telegram text message -> `message_parser.
-parse_expense` (regex: a leading `$`, an amount, then everything else is
-the note) -> if it parses, an `Expense(amount_cents, note, timestamp=
-Config.now())` is inserted and the bot replies with a confirmation; if it
-doesn't parse (no `$`, non-numeric amount, zero/negative amount), the bot
-asks the user to check the format rather than silently dropping the
-message.
+parse_expense` (comma-separated: a leading `$<amount>`, then `<item>`,
+then an optional `<category>` - anything past the 2nd comma folds into
+category) -> if it parses, an `Expense(amount_cents, item, category,
+timestamp=Config.now())` is inserted and the bot replies with a
+confirmation; if it doesn't parse (no `$`, missing item, non-numeric or
+zero/negative amount), the bot asks the user to check the format rather
+than silently dropping the message.
+
+**This format changed mid-project** (see "How the schema evolved" below) -
+the very first version only asked for amount + a free-text note, no
+category, space-separated (`"$12 lunch"`). If you see that format anywhere
+in old notes/history, it's superseded.
 
 ## Key conventions
 
@@ -44,15 +51,22 @@ message.
   `stats.format_cents` is the only place that converts back to a display
   string (`$1,234.56`); nothing else should do `cents / 100` and expect a
   precise dollar value out the other end.
-- **No expense categories** - this was a deliberate scope decision (the
-  user chose "no categories, just totals + notes" over a fixed category
-  list like chores-assistant's chore types or a hypothetical category
-  enum here). `stats.py` and the dashboard only ever report totals/
-  averages/largest/smallest, never a by-category breakdown. If categories
-  get added later, that's a real schema change (a `category` column plus
-  either a fixed enum or free-text tagging), not just a display tweak -
-  revisit `message_parser.parse_expense`'s regex too, since right now
-  everything after the amount is swallowed as one opaque `note`.
+- **Categories are free-form, not a fixed list.** The user defines a
+  category per-message, on the fly ("$12, lunch, food" this time, "$12,
+  lunch, dining out" next time would be a *different* category - there's
+  no enum or autocomplete). `message_parser.parse_expense` lowercases and
+  strips the category so casing doesn't fragment it ("Food" and "food"
+  land in the same bucket), but a typo or a differently-worded category
+  still creates a new bucket - that's accepted as inherent to "on the fly"
+  categorization, not a bug to fix with fuzzy-matching. Omitted category
+  files under `database.UNCATEGORIZED` ("uncategorized").
+- **Comma is the field delimiter, so it can't also be a thousands
+  separator in the amount.** `"$1,200, rent, bills"` silently misparses
+  (splits into 4 comma-fields, not 3) rather than being rejected - write
+  large amounts as `"$1200"`. This is a real, documented limitation
+  (see `message_parser.py`'s module docstring and
+  `test_comma_thousands_separator_collides_with_delimiter`), not
+  something to "fix" without changing the delimiter scheme entirely.
 - **All datetimes are naive local time, always.** Same reasoning as the
   sibling projects: SQLite drops tzinfo on round-trip, so the whole app
   standardizes on naive local datetimes. Use `Config.now()`, never
@@ -67,18 +81,93 @@ message.
   `backups/` (keeps last 14) on every bot startup as a second line of
   defense. Same guard-rail pattern as chores-assistant and
   wake-work-sleep-logger - copied up front instead of waiting to repeat
-  the mistake that motivated it there.
-- **Average-per-day divides by the fixed range length, not by days with
-  data.** `stats.range_stats`'s `avg_per_day_cents` for "week" is always
-  `total / 7`, even if you only logged on 3 of those days - it reads as
-  an actual daily spending rate ("you're averaging $X/day this month"),
+  the mistake that motivated it there. It nonetheless still requires a
+  human (or Claude) to remember to back up before a schema migration
+  specifically, since `init_db()`'s auto-backup only fires on bot startup,
+  not before an ad-hoc migration script - see the Lessons Learned entry
+  below, this is exactly what almost got skipped.
+- **Average-per-day (in `range_stats`) divides by the fixed range length,
+  not by days with data.** `total / 7` for "week", even if you only
+  logged on 3 of those days - it reads as an actual daily spending rate,
   not something that jumps around based on logging frequency. The
   dashboard's "all" tab is the one exception - there's no fixed range
   length for "all time", so it divides by the number of days that
   actually have data instead (see `computeStats` in `docs/index.html`).
+- **`spend_rate_stats`'s weekly/monthly/quarterly averages are derived
+  from the trailing-**year** total** (÷52, ÷12, ÷4), not from each
+  range's own total - a single week of data would otherwise make
+  "average quarterly spend" swing wildly. This is a *different* number
+  from "total spent in the last 7/30/90 days" (which `/stats` also shows,
+  separately, unsmoothed) - don't conflate the two or collapse them into
+  one number, they answer different questions ("what did I actually
+  spend recently" vs "what's my steady-state rate").
 - **The bot restricts itself to `TELEGRAM_USER_ID` once configured**,
   same as wake-work-sleep-logger - optional at first boot (unset =
   accept from anyone) so `/start` can reveal the ID to put in `.env`.
+
+## /recent, /delete, /edit - correcting entries after the fact
+
+Added alongside the item/category rework, since typos are a lot costlier
+to catch in a spending log than a wake-up time. All three live in
+`entries.py` (decoupled from `telegram_handler.py`'s Update/Context
+objects, so they're directly unit-testable) and share one convention:
+
+- Indexes are **1-based, 1 = most recent**, and always **re-derived fresh
+  from the DB** on every call - there's no server-side "memory" of what
+  `/recent` last showed. If you log a new expense between `/recent` and
+  `/delete 2`, `#2` now refers to the current 2nd-most-recent entry, not
+  whatever was `#2` a message ago. This is a deliberate simplicity choice
+  (no per-chat session state to manage) - if it ever causes a "deleted the
+  wrong thing" complaint, revisit before adding session state to fix it.
+- `entries.delete_recent` and `entries.edit_recent` return an
+  `EntrySnapshot` (plain dataclass), not the SQLAlchemy `Expense` object.
+  Reading ORM attributes off an instance *after* `db.commit()` triggers a
+  refresh query - which raises `ObjectDeletedError` for a just-deleted row.
+  Both functions capture the display fields into the snapshot **before**
+  `db.commit()` runs, specifically to avoid that.
+- `/edit <n> $amount, item, category` reuses `message_parser.parse_expense`
+  on everything after the index, so it's the exact same format/validation
+  as logging a new expense - no separate parser to keep in sync.
+- `/edit` overwrites amount/item/category but **leaves `timestamp`
+  untouched** - it's a correction to what was logged, not a re-log at a
+  new time. (Contrast with wake-work-sleep-logger's backfill feature,
+  which is the opposite case - a new event at a specified past time, not a
+  correction to an existing one.)
+
+## How the schema evolved (read this before assuming the current shape is final)
+
+This project's schema and message format changed twice in its first day,
+both times mid-session while the user was already sending real messages to
+the live bot:
+
+1. **Initial build**: amount + free-text note, no category
+   (`"$12 lunch"`), space-delimited. Deliberate scope decision at the
+   time - the user explicitly chose "no categories, just totals + notes"
+   when asked.
+2. **Same-day pivot**: the user changed their mind and asked for a 3rd
+   field (category), user-defined "on the fly". Space-delimiting broke
+   down once item/category could each be multiple words, so the format
+   became comma-delimited (`"$12, lunch, food"`) instead - this is *not*
+   backwards compatible with the old format's messages.
+3. **Live data existed when the pivot happened.** The user logged one real
+   expense (`"$50, Yummy Pho, food"`, parsed under the *old* 2-field
+   parser as amount=$50 + note="Yummy Pho, food") in the gap between the
+   category feature being requested and being deployed. Migrating the
+   schema (`note` column -> `item` + `category` columns) meant either
+   discarding that row or recovering it - it was recovered by re-running
+   the *new* `parse_expense` against the row's saved `raw_message`
+   (`"$50, Yummy Pho, food"`), which happened to already be in
+   comma-format because the user had started typing the new format before
+   the code caught up. Lesson: `raw_message` being preserved verbatim
+   (not just the parsed fields) is what made this recovery possible at
+   all - don't stop storing it as "redundant" with `item`/`category`,
+   it's the only way to re-derive data after a parser change.
+
+If a 4th field or another schema change gets requested, expect this same
+pattern: back up first (an extra explicit backup beyond the automatic
+startup one, right before touching the schema), check for live rows before
+assuming a clean slate, and prefer re-parsing `raw_message` under the new
+rules over discarding data that predates a format change.
 
 ## The GitHub Pages data pipeline
 
@@ -96,10 +185,7 @@ Linux box (systemd timer, every 15 min)
 ```
 
 - The repo (`GoatSpark/spending-tracker`) is **public**, same choice as
-  wake-work-sleep-logger - the user was comfortable with spend *amounts*
-  and notes being publicly visible (no account/merchant/card details are
-  ever collected in the first place, so there's nothing more sensitive
-  than the note text to weigh).
+  wake-work-sleep-logger.
 - Push auth uses a **dedicated deploy key**
   (`~/.ssh/spending_tracker_deploy` on the Linux box, distinct from
   wake-work-sleep-logger's own key), added to this repo only with write
@@ -109,11 +195,15 @@ Linux box (systemd timer, every 15 min)
 - `export_stats.py` only writes JSON - it never touches git, same
   separation of concerns as the sibling project.
 - `docs/data.json`'s per-day rows are `{date, total_cents, count,
-  max_cents, min_cents}` - enough for the dashboard to compute total/avg/
-  largest/smallest for any selected range client-side without needing
-  every individual transaction (which would also leak note text per-
-  transaction into the public JSON - the per-day rollup deliberately
-  keeps notes off the public dashboard entirely).
+  max_cents, min_cents, categories: {category: total_cents}}` - enough
+  for the dashboard to compute total/avg/largest/smallest/by-category for
+  any selected range client-side. **Per-transaction `item` text is
+  deliberately never exported** - only category *subtotals* are public,
+  so the dashboard can show "you spent $340 on food this month" without
+  also publishing "you bought Yummy Pho for $50 on Aug 24". If a future
+  feature wants per-transaction detail on the dashboard, that's a
+  privacy-relevant decision to flag to the user, not just a data-shape
+  change.
 
 ## Running the bot / working preferences
 
@@ -143,6 +233,11 @@ journalctl --user -u spending-tracker-export.service -n 50 --no-pager
   confirmed on both sibling projects, a bot's own `sendMessage` calls
   never come back through `getUpdates`. Verifying the actual live bot
   requires the user to send a real message from their Telegram client.
-  `pytest` and direct `message_parser`/`stats` calls in isolation are how
-  Claude verifies logic changes; `scripts/manual_smoke_test.py` is an
-  opt-in manual round-trip prompt, not an automated test.
+  `pytest` and direct `message_parser`/`stats`/`entries` calls in
+  isolation are how Claude verifies logic changes; `scripts/
+  manual_smoke_test.py` is an opt-in manual round-trip prompt, not an
+  automated test. **In practice this session, the user kept using the
+  live bot while development was happening in the same conversation** -
+  don't assume the live DB is empty/inert just because a feature is
+  mid-build; check row counts before any schema-touching operation, every
+  time, even if it was empty minutes ago.
