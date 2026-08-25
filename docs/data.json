@@ -1,15 +1,16 @@
 {
-  "generated_at": "2026-08-24T22:42:31.311801",
+  "generated_at": "2026-08-24T22:58:31.305958",
   "timezone": "America/Los_Angeles",
   "days": [
     {
       "date": "2026-08-24",
-      "total_cents": 5000,
-      "count": 1,
-      "max_cents": 5000,
+      "total_cents": 23000,
+      "count": 2,
+      "max_cents": 18000,
       "min_cents": 5000,
       "categories": {
-        "food": 5000
+        "food": 5000,
+        "pas": 18000
       }
     }
   ],
