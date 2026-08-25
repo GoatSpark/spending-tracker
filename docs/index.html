@@ -1,0 +1,272 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Spending Tracker</title>
+<style>
+  :root {
+    --bg: #f5f6f8;
+    --panel: #ffffff;
+    --text: #1a1b1f;
+    --muted: #6b7280;
+    --border: #e5e7eb;
+    --accent: #059669;
+    --bar: #10b981;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0e1013;
+      --panel: #191c22;
+      --text: #e9eaed;
+      --muted: #9aa1ac;
+      --border: #2b2f38;
+      --accent: #34d399;
+      --bar: #34d399;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  }
+  .wrap { max-width: 920px; margin: 0 auto; padding: 32px 20px 64px; }
+  header h1 { font-size: 1.6rem; margin: 0 0 4px; letter-spacing: -0.02em; }
+  header .meta { color: var(--muted); font-size: 0.85rem; margin: 0 0 24px; }
+
+  .tabs {
+    display: inline-flex;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 4px;
+    gap: 2px;
+    margin-bottom: 24px;
+  }
+  .tabs button {
+    border: none;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.88rem;
+    padding: 7px 14px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-family: inherit;
+  }
+  .tabs button.active {
+    background: var(--bg);
+    color: var(--text);
+    font-weight: 600;
+  }
+
+  .cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+    gap: 14px;
+    margin-bottom: 28px;
+  }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+    border-top: 3px solid var(--accent);
+  }
+  .card-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  .card .icon { font-size: 1rem; }
+  .card .big { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+  .card .sub { color: var(--muted); font-size: 0.82rem; margin-top: 4px; }
+  .card .dash { margin: 0 4px; }
+
+  .chart-card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px;
+  }
+  .chart-title {
+    font-size: 0.85rem;
+    color: var(--muted);
+    margin-bottom: 8px;
+  }
+  .chart-svg { width: 100%; height: 200px; display: block; overflow: visible; }
+  .grid { stroke: var(--border); stroke-width: 1; }
+  .axis-label { fill: var(--muted); font-size: 9px; font-family: inherit; }
+  .chart-empty { color: var(--muted); font-size: 0.85rem; padding: 20px 0; }
+
+  .empty { color: var(--muted); text-align: center; padding: 60px 0; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>Spending Tracker</h1>
+      <p class="meta" id="meta"></p>
+    </header>
+
+    <div class="tabs" id="tabs">
+      <button data-range="week" class="active">Week</button>
+      <button data-range="month">Month</button>
+      <button data-range="quarter">Quarter</button>
+      <button data-range="year">Year</button>
+      <button data-range="all">All</button>
+    </div>
+
+    <div class="cards" id="cards"></div>
+    <div class="chart-card">
+      <div class="chart-title">Daily spending</div>
+      <div id="chart"></div>
+    </div>
+    <p class="empty" id="empty" hidden>No expenses logged yet &mdash; message the bot to get started.</p>
+  </div>
+
+<script>
+const RANGE_DAYS = { week: 7, month: 30, quarter: 90, year: 365 };
+
+let DATA = null;
+let currentRange = "week";
+
+function formatCents(cents) {
+  const sign = cents < 0 ? "-" : "";
+  const abs = Math.round(Math.abs(cents));
+  const dollars = Math.floor(abs / 100);
+  const remainder = abs % 100;
+  return `${sign}$${dollars.toLocaleString()}.${String(remainder).padStart(2, "0")}`;
+}
+
+function addDaysToIso(isoDate, delta) {
+  const d = new Date(isoDate + "T00:00:00");
+  d.setDate(d.getDate() + delta);
+  return d.toISOString().slice(0, 10);
+}
+
+function filteredDays(rangeName) {
+  const days = DATA.days;
+  if (!days.length) return [];
+  if (rangeName === "all") return days;
+  const n = RANGE_DAYS[rangeName];
+  const latest = days[days.length - 1].date;
+  const since = addDaysToIso(latest, -(n - 1));
+  return days.filter(d => d.date >= since);
+}
+
+function computeStats(days, rangeName) {
+  if (!days.length) return null;
+  const total = days.reduce((a, d) => a + d.total_cents, 0);
+  const count = days.reduce((a, d) => a + d.count, 0);
+  const largest = Math.max(...days.map(d => d.max_cents));
+  const smallest = Math.min(...days.map(d => d.min_cents));
+  const denominatorDays = rangeName === "all" ? days.length : RANGE_DAYS[rangeName];
+  return {
+    total, count, largest, smallest,
+    avgPerDay: total / denominatorDays,
+    daysLogged: days.length,
+  };
+}
+
+function renderCards(days, rangeName) {
+  const cardsEl = document.getElementById("cards");
+  const stats = computeStats(days, rangeName);
+  if (!stats) {
+    cardsEl.innerHTML = "";
+    return;
+  }
+  cardsEl.innerHTML = `
+    <div class="card">
+      <div class="card-head"><span class="icon">\u{1F4B5}</span><span>Total spent</span></div>
+      <div class="big">${formatCents(stats.total)}</div>
+      <div class="sub">${stats.daysLogged} day${stats.daysLogged === 1 ? "" : "s"} with purchases</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="icon">\u{1F4CA}</span><span>Avg per day</span></div>
+      <div class="big">${formatCents(stats.avgPerDay)}</div>
+      <div class="sub">over the full period</div>
+    </div>
+    <div class="card">
+      <div class="card-head"><span class="icon">\u{1F9FE}</span><span>Purchases</span></div>
+      <div class="big">${stats.count}</div>
+      <div class="sub"><span>${formatCents(stats.smallest)}</span><span class="dash">&ndash;</span><span>${formatCents(stats.largest)}</span></div>
+    </div>
+  `;
+}
+
+function renderChart(days) {
+  const chartEl = document.getElementById("chart");
+  if (days.length < 1) {
+    chartEl.innerHTML = `<div class="chart-empty">No data in this range</div>`;
+    return;
+  }
+
+  const width = 640, height = 200, padL = 46, padR = 12, padT = 12, padB = 20;
+  const maxTotal = Math.max(...days.map(d => d.total_cents), 1);
+
+  const barW = Math.max(2, (width - padL - padR) / days.length - 2);
+  const x = i => padL + (i / days.length) * (width - padL - padR);
+  const y = cents => padT + (1 - cents / maxTotal) * (height - padT - padB);
+
+  const bars = days.map((d, i) => {
+    const barHeight = (height - padT - padB) - (y(d.total_cents) - padT);
+    return `<rect x="${x(i).toFixed(1)}" y="${y(d.total_cents).toFixed(1)}" width="${barW.toFixed(1)}" height="${Math.max(0, barHeight).toFixed(1)}" fill="var(--bar)" rx="1.5"><title>${d.date}: ${formatCents(d.total_cents)} (${d.count} purchase${d.count === 1 ? "" : "s"})</title></rect>`;
+  }).join("");
+
+  const gridlines = [];
+  const step = Math.max(1, Math.ceil(maxTotal / 4 / 100) * 100);
+  for (let cents = 0; cents <= maxTotal; cents += step) {
+    const gy = y(cents).toFixed(1);
+    gridlines.push(`<line x1="${padL}" x2="${width - padR}" y1="${gy}" y2="${gy}" class="grid" />`);
+    gridlines.push(`<text x="${padL - 6}" y="${(y(cents) + 3).toFixed(1)}" class="axis-label" text-anchor="end">${formatCents(cents)}</text>`);
+  }
+
+  chartEl.innerHTML = `<svg viewBox="0 0 ${width} ${height}" preserveAspectRatio="none" class="chart-svg">
+    ${gridlines.join("")}
+    ${bars}
+  </svg>`;
+}
+
+function render() {
+  const metaEl = document.getElementById("meta");
+  metaEl.textContent = DATA.generated_at
+    ? `Updated ${new Date(DATA.generated_at).toLocaleString()} · ${DATA.timezone}`
+    : "";
+
+  const emptyEl = document.getElementById("empty");
+  if (!DATA.days.length) {
+    emptyEl.hidden = false;
+    document.getElementById("cards").innerHTML = "";
+    document.getElementById("chart").innerHTML = "";
+    return;
+  }
+  emptyEl.hidden = true;
+
+  const days = filteredDays(currentRange);
+  renderCards(days, currentRange);
+  renderChart(days);
+}
+
+document.getElementById("tabs").addEventListener("click", (e) => {
+  const btn = e.target.closest("button[data-range]");
+  if (!btn) return;
+  currentRange = btn.dataset.range;
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("active", b === btn));
+  render();
+});
+
+fetch("data.json", { cache: "no-store" })
+  .then(res => res.json())
+  .then(data => { DATA = data; render(); })
+  .catch(() => {
+    document.getElementById("meta").textContent = "Could not load data.json yet.";
+    document.getElementById("empty").hidden = false;
+  });
+</script>
+</body>
+</html>
