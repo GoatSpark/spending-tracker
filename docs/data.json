@@ -1,5 +1,41 @@
 {
-  "generated_at": "2026-08-24T21:22:35.386672",
+  "generated_at": "2026-08-24T21:22:54.972944",
   "timezone": "America/Los_Angeles",
-  "days": []
+  "days": [
+    {
+      "date": "2026-08-20",
+      "total_cents": 1650,
+      "count": 2,
+      "max_cents": 1200,
+      "min_cents": 450
+    },
+    {
+      "date": "2026-08-21",
+      "total_cents": 1650,
+      "count": 2,
+      "max_cents": 1200,
+      "min_cents": 450
+    },
+    {
+      "date": "2026-08-22",
+      "total_cents": 1650,
+      "count": 2,
+      "max_cents": 1200,
+      "min_cents": 450
+    },
+    {
+      "date": "2026-08-23",
+      "total_cents": 1650,
+      "count": 2,
+      "max_cents": 1200,
+      "min_cents": 450
+    },
+    {
+      "date": "2026-08-24",
+      "total_cents": 1650,
+      "count": 2,
+      "max_cents": 1200,
+      "min_cents": 450
+    }
+  ]
 }
