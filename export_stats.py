@@ -3,10 +3,13 @@ Export logged expenses to docs/data.json for the GitHub Pages dashboard.
 
 Run periodically (see scripts/export_and_push.sh + the systemd timer) - this
 script only writes the JSON file, it does not touch git. Format is one row
-per day: total spent, count of purchases, and the largest/smallest single
-purchase that day (all in integer cents) - enough for the dashboard to
-compute total/avg/largest/smallest over any selected range without
-re-deriving them from individual transactions client-side.
+per day: total spent, count of purchases, the largest/smallest single
+purchase that day, and a per-category subtotal (all in integer cents) -
+enough for the dashboard to compute total/avg/largest/smallest/by-category
+over any selected range without re-deriving them from individual
+transactions client-side. Per-transaction `item` text is deliberately left
+out of the export - only category subtotals are public, not what you
+actually bought.
 """
 
 import json
@@ -37,6 +40,7 @@ def build_export() -> dict:
             "count": totals.count,
             "max_cents": totals.max_cents,
             "min_cents": totals.min_cents,
+            "categories": dict(totals.categories),
         })
 
     return {

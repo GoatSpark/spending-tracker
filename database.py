@@ -5,7 +5,7 @@ Database models and setup for Spending Tracker
 import glob
 import os
 import shutil
-from sqlalchemy import create_engine, Column, Integer, DateTime, Text
+from sqlalchemy import create_engine, Column, Integer, DateTime, Text, String
 from sqlalchemy.orm import sessionmaker, declarative_base
 from config import get_database_url, Config
 
@@ -53,6 +53,8 @@ def SessionLocal():
 
 Base = declarative_base()
 
+UNCATEGORIZED = "uncategorized"
+
 
 class Expense(Base):
     """One logged purchase"""
@@ -64,13 +66,17 @@ class Expense(Base):
     # Decimal in message_parser.parse_expense, formatted back to "$X.XX"
     # via stats.format_cents.
     amount_cents = Column(Integer, nullable=False)
-    note = Column(Text, nullable=False, default="")
+    item = Column(Text, nullable=False, default="")
+    # Free-text, user-defined on the fly per message - not a fixed enum.
+    # Normalized to lowercase/stripped in message_parser.parse_expense so
+    # "Food" and "food" land in the same bucket for stats grouping.
+    category = Column(String, nullable=False, default=UNCATEGORIZED, index=True)
     timestamp = Column(DateTime, nullable=False, default=Config.now, index=True)
     raw_message = Column(Text, nullable=False)
     created_at = Column(DateTime, default=Config.now)
 
     def __repr__(self):
-        return f"<Expense id={self.id} amount_cents={self.amount_cents} timestamp={self.timestamp}>"
+        return f"<Expense id={self.id} amount_cents={self.amount_cents} category={self.category} timestamp={self.timestamp}>"
 
 
 def backup_database():

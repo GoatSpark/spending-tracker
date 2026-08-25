@@ -103,6 +103,20 @@
   .axis-label { fill: var(--muted); font-size: 9px; font-family: inherit; }
   .chart-empty { color: var(--muted); font-size: 0.85rem; padding: 20px 0; }
 
+  .category-card { margin-top: 14px; }
+  .category-row {
+    display: grid;
+    grid-template-columns: 120px 1fr 70px;
+    align-items: center;
+    gap: 10px;
+    padding: 5px 0;
+    font-size: 0.85rem;
+  }
+  .category-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .category-row .bar-track { background: var(--bg); border-radius: 4px; height: 8px; overflow: hidden; }
+  .category-row .bar-fill { background: var(--bar); height: 100%; border-radius: 4px; }
+  .category-row .amount { text-align: right; color: var(--muted); }
+
   .empty { color: var(--muted); text-align: center; padding: 60px 0; }
 </style>
 </head>
@@ -125,6 +139,10 @@
     <div class="chart-card">
       <div class="chart-title">Daily spending</div>
       <div id="chart"></div>
+    </div>
+    <div class="chart-card category-card">
+      <div class="chart-title">By category</div>
+      <div id="categories"></div>
     </div>
     <p class="empty" id="empty" hidden>No expenses logged yet &mdash; message the bot to get started.</p>
   </div>
@@ -232,6 +250,33 @@ function renderChart(days) {
   </svg>`;
 }
 
+function computeCategoryTotals(days) {
+  const totals = {};
+  for (const day of days) {
+    for (const [category, cents] of Object.entries(day.categories || {})) {
+      totals[category] = (totals[category] || 0) + cents;
+    }
+  }
+  return Object.entries(totals).sort((a, b) => b[1] - a[1]);
+}
+
+function renderCategories(days) {
+  const el = document.getElementById("categories");
+  const totals = computeCategoryTotals(days);
+  if (!totals.length) {
+    el.innerHTML = `<div class="chart-empty">No data in this range</div>`;
+    return;
+  }
+  const max = totals[0][1];
+  el.innerHTML = totals.map(([category, cents]) => `
+    <div class="category-row">
+      <span class="name">${category}</span>
+      <span class="bar-track"><span class="bar-fill" style="width:${((cents / max) * 100).toFixed(1)}%"></span></span>
+      <span class="amount">${formatCents(cents)}</span>
+    </div>
+  `).join("");
+}
+
 function render() {
   const metaEl = document.getElementById("meta");
   metaEl.textContent = DATA.generated_at
@@ -243,6 +288,7 @@ function render() {
     emptyEl.hidden = false;
     document.getElementById("cards").innerHTML = "";
     document.getElementById("chart").innerHTML = "";
+    document.getElementById("categories").innerHTML = "";
     return;
   }
   emptyEl.hidden = true;
@@ -250,6 +296,7 @@ function render() {
   const days = filteredDays(currentRange);
   renderCards(days, currentRange);
   renderChart(days);
+  renderCategories(days);
 }
 
 document.getElementById("tabs").addEventListener("click", (e) => {
