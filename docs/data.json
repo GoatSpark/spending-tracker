@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-24T22:15:28.806845",
+  "generated_at": "2026-08-24T22:26:31.033320",
   "timezone": "America/Los_Angeles",
   "days": [
     {
@@ -11,6 +11,12 @@
       "categories": {
         "food": 5000
       }
+    }
+  ],
+  "budgets": [
+    {
+      "category": "food",
+      "amount_cents": 6000
     }
   ]
 }
