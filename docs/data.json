@@ -1,5 +1,5 @@
 {
-  "generated_at": "2026-08-26T09:21:31.310748",
+  "generated_at": "2026-08-26T09:37:31.338317",
   "timezone": "America/Los_Angeles",
   "days": [
     {
@@ -21,6 +21,16 @@
       "min_cents": 440,
       "categories": {
         "food": 440
+      }
+    },
+    {
+      "date": "2026-08-26",
+      "total_cents": 500,
+      "count": 1,
+      "max_cents": 500,
+      "min_cents": 500,
+      "categories": {
+        "coffee": 500
       }
     }
   ],
